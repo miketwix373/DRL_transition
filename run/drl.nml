@@ -1,0 +1,6 @@
+&stw_drl
+n_act = 1.
+offset = 0.
+bnx = 24
+bny = 8
+drl_inc = 1
