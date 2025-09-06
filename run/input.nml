@@ -3,24 +3,24 @@ ng(1:3) = 96, 64, 200
 l(1:3) = 4.986, 1.5708, 2.
 gtype = 1, gr = 3.
 cfl = 0.95, dtmin = 0.03
-visci = 3170.
+visci = 10000.
 inivel = 'poi'
-is_wallturb = T
-nstep = 1000000000, time_max = 10., tw_max = 0.1
+is_wallturb = F
+nstep = 10, time_max = 10., tw_max = 0.1
 stop_type(1:3) = T, T, F
-restart = T, is_overwrite_save = T
+restart = F, is_overwrite_save = T
 nsaves_max = 10
-icheck = 10, iout0d = 20, iout1d = 100000000, iout2d = 100000000, iout3d = 10000000, isave = 10000000
-cbcvel(0:1,1:3,1) = 'P','P',  'P','P',  'D','D'
-cbcvel(0:1,1:3,2) = 'P','P',  'P','P',  'D','D'
-cbcvel(0:1,1:3,3) = 'P','P',  'P','P',  'D','D'
-cbcpre(0:1,1:3)   = 'P','P',  'P','P',  'N','N'
-bcvel(0:1,1:3,1) =  0.,0.,   0.,0.,   0.,0.
+icheck = 5, iout0d = 20, iout1d = 100000000, iout2d = 1, iout3d = 10000000, isave = 10000000
+cbcvel(0:1,1:3,1) = 'D','D',  'P','P',  'D','D'
+cbcvel(0:1,1:3,2) = 'D','D',  'P','P',  'D','D'
+cbcvel(0:1,1:3,3) = 'D','D',  'P','P',  'D','D'
+cbcpre(0:1,1:3)   = 'N','N',  'P','P',  'N','N'
+bcvel(0:1,1:3,1) =  0.,0.,   0.,0.,   0.,1.
 bcvel(0:1,1:3,2) =  0.,0.,   0.,0.,   0.,0.
 bcvel(0:1,1:3,3) =  0.,0.,   0.,0.,   0.,0.
 bcpre(0:1,1:3) =    0.,0.,   0.,0.,   0.,0.
-is_forced(1:3) = T, F, F
-velf(1:3) = 1., 0., 0.
+is_forced(1:3) = F, F, F
+velf(1:3) = 0., 0., 0.
 bforce(1:3) = 0., 0., 0.
 dims(1:2) = 0, 0
 \

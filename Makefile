@@ -39,7 +39,7 @@ EXE := $(EXE_DIR)/$(TARGET)
 
 # Configuration settings
 FC := mpifort
-FFLAGS := 
+FFLAGS :=
 AR := ar rcs
 LD := $(FC)
 RM := rm -f

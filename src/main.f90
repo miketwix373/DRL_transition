@@ -32,7 +32,7 @@ program cans
   use, intrinsic :: ieee_arithmetic, only: is_nan => ieee_is_nan
   use mpi
   use decomp_2d
-  use mod_bound          , only: boundp,bounduvw,updt_rhs_b
+  use mod_bound          , only: boundp,bounduvw,updt_rhs_b, get_outflow, correct_outf
   use mod_chkdiv         , only: chkdiv
   use mod_chkdt          , only: chkdt
   use mod_common_mpi     , only: myid,ourid,ierr,parentcomm,intracomm,group,cansgroup,canscomm,mysize,oursize
@@ -46,6 +46,7 @@ program cans
   use mod_load           , only: load_all
   use mod_mom            , only: bulk_forcing
   use mod_rk             , only: rk
+  use mod_lbl
   use mod_output         , only: out0d,gen_alias,out1d,out1d_chan,out2d,out3d,write_log_output,write_visu_2d,write_visu_3d
   use mod_param          , only: ng,l,dl,dli, &
                                  gtype,gr, &
@@ -114,6 +115,13 @@ program cans
   implicit none
   integer , dimension(3) :: lo,hi,n,n_x_fft,n_y_fft,lo_z,hi_z,n_z
   real(rp), allocatable, dimension(:,:,:) :: u,v,w,p,pp
+  real(rp), allocatable, dimension(:,:,:) :: blow, inflow, outflow
+  real(rp), allocatable, dimension(:,:,:) :: inflowlam
+
+  complex(rp), allocatable, dimension(:)     :: upert, vpert
+
+  logical :: bc_options(4)
+
   real(rp), dimension(3) :: tauxo,tauyo,tauzo
   real(rp), dimension(3) :: f
 #if !defined(_OPENACC)
@@ -172,6 +180,8 @@ program cans
 #if defined(_DRL)
   integer, allocatable, dimension(:) :: canscomm_ranks
 #endif
+  real(rp) :: uinf, delta0, x0
+  real(rp) :: alpha_ts, beta_r, beta_i, pert_amp
   !
   call MPI_INIT(ierr)
   ! Define the python parent and merge the comms to create intracomm
@@ -217,6 +227,17 @@ program cans
            w( 0:n(1)+1,0:n(2)+1,0:n(3)+1), &
            p( 0:n(1)+1,0:n(2)+1,0:n(3)+1), &
            pp(0:n(1)+1,0:n(2)+1,0:n(3)+1))
+  
+  allocate(blow(0:n(1)+1,0:n(2)+1,3))
+  allocate(inflow(0:n(2)+1,0:n(3)+1,3))
+
+  allocate(inflowlam(0:n(2)+1,0:n(3)+1,3))
+
+  allocate(outflow(0:n(2)+1,0:n(3)+1,3))
+
+  allocate(upert(0:n(3)+1),vpert(0:n(3)+1))
+
+
   allocate(lambdaxyp(n_z(1),n_z(2)))
   allocate(ap(n_z(3)),bp(n_z(3)),cp(n_z(3)))
   allocate(dzc( 0:n(3)+1), &
@@ -290,6 +311,14 @@ program cans
   end if
   
 #endif
+
+
+ bc_options = .true.
+ uinf       = 1.0_rp
+ delta0     = 0.1_rp
+ x0         = ((delta0/1.7208_rp)**2)*uinf/visc
+ pert_amp   = 0.001_rp
+
 #if defined(_DEBUG)
   if(myid == 0) print*, 'This executable of CaNS was built with compiler: ', compiler_version()
   if(myid == 0) print*, 'Using the options: ', compiler_options()
@@ -322,6 +351,8 @@ program cans
     close(99)
   end if
   print*, 'myid = ', myid, ' hi and lo = ', hi, lo, 'n(1),n(2) = ', n(1),n(2) 
+
+
   !$acc enter data copyin(lo,hi,n) async
   !$acc enter data copyin(bforce,dl,dli,l) async
   !$acc enter data copyin(zc_g,zf_g,dzc_g,dzf_g) async
@@ -409,6 +440,10 @@ program cans
     !$acc update self(zc,dzc,dzf)
     call initflow(inivel,bcvel,ng,lo,l,dl,zc,zf,dzc,dzf,visc, &
                   is_forced,velf,bforce,is_wallturb,u,v,w,p)
+
+    call init_lbl(u,v,w,dl,n,lo,zf,zc,visc,uinf,delta0)
+
+
     if(myid == 0) print*, '*** Initial condition succesfully set ***'
   else
     call load_all('r',trim(datadir)//'fld.bin',canscomm,ng,[1,1,1],lo,hi,u,v,w,p,time,istep)
@@ -418,12 +453,22 @@ program cans
 #endif
     if(myid == 0) print*, '*** Checkpoint loaded at time = ', time, 'time step = ', istep, '. ***'
   end if
+
+  call get_lam_inflow(inflow,dl,n,lo,zf,zc,visc,uinf,delta0) 
+  inflowlam = inflow
+  call read_eigenval(zf, zc, upert, vpert,sqrt(visc*x0/uinf),n,datadir)
+  call read_waveparam(alpha_ts, beta_r, beta_i)
+  call get_lam_blow(blow,dl,n,lo,zf,zc,visc,uinf,delta0) 
+
+
+
+
   !$acc enter data copyin(u,v,w,p) create(pp)
   !print*, 'I am id = ', myid, ' and (lo,hi) = ', lo, hi
   !print*, 'xgrid      = ', (11+lo(1)-1-.5)*dl(1)
 #if defined (_STW)
       do_stw = .true.
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w,lo)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w,lo,bc_options,inflow,outflow,blow)
       do_stw = .false.
 #else
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
@@ -475,6 +520,12 @@ program cans
     tauyo(:) = 0.
     tauzo(:) = 0.
     dpdl(:)  = 0.
+
+    call perturb_inflow(inflow, inflowlam,upert, vpert,alpha_ts, beta_r, beta_i, pert_amp, x0, time, n, lo,.true.)
+    inflow = inflowlam
+    call get_outflow('convective',outflow,u,v,w,dt,dl,1.0_rp,n)
+    call correct_outf(inflow, outflow, blow, dzf, dl, is_bound, n, lo, l,zc,datadir)
+
     do irk=1,3
       dtrk = sum(rkcoeff(:,irk))*dt
       dtrki = dtrk**(-1)
@@ -571,7 +622,7 @@ program cans
       dpdl(:) = dpdl(:) + f(:)
 #if defined (_STW)
       do_stw = .true.
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w,lo)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w,lo,bc_options,inflow,outflow,blow)
       do_stw = .false.
 #else
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
@@ -583,7 +634,7 @@ program cans
       call correc(n,dli,dzci,dtrk,pp,u,v,w)
 #if defined (_STW)
       do_stw = .true.
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dl,dzc,dzf,u,v,w,lo)
+      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dl,dzc,dzf,u,v,w,lo,bc_options,inflow,outflow,blow)
       do_stw = .false.
 #else
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dl,dzc,dzf,u,v,w)
@@ -718,7 +769,7 @@ program cans
       e_kw     = e_kw + (e_kw_1 + e_kw_2)/dt*real(icheck)
       e_ks     = e_ks + e_ks_1/dt*real(icheck)
       e_ks_rew = e_ks_rew + e_ks_1/(e_kw_1+e_kw_2)
-      if (myid==0) open(1,file=trim(datadir)//'ek.out',access='append')
+      !if (myid==0) open(1,file=trim(datadir)//'ek.out',access='append')
       write(1,*) e_ks_1, e_kw_1+e_kw_2, e_ks_1/(e_kw_1+e_kw_2), e_ks/e_kw, (e_ks_1+e_kw_1+e_kw_2)*1000.
       close(1)
     end if
